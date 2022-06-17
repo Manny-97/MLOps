@@ -94,11 +94,7 @@ What's the RMSE on validation?
 * 16.01
 * 21.01
 
-## Submit the results
 
-Submit your results here: https://forms.gle/V8q5rv7QRoZ13Sft6
-
-It's possible that your answers won't match exactly. If it's the case, select the closest one.
 
 
 ## Deadline
@@ -108,6 +104,6 @@ The deadline for submitting is 24 May 2022 (Tuesday) 23:00 CET. After that, the 
 
 ## Solution
 
-* [Video](https://www.youtube.com/watch?v=feH1PMLyu-Q&list=PL3MmuxUbc_hIUISrluw_A7wDSmfOhErJK&index=9)
-* [Notebook](homework.ipynb)
+
+* [Notebook](https://github.com/Manny-97/MLOps/blob/main/Week%201%20Introduction/Homework.ipynb)
 
