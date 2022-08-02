@@ -1,21 +1,21 @@
 import pandas as pd
 import pickle
-import seaborn as sns
-import matplotlib.pyplot as plt
-from sklearn.feature_extraction import DictVectorizer
-from sklearn.linear_model import LinearRegression
-from sklearn.linear_model import Lasso
-from sklearn.linear_model import Ridge
 
+from sklearn.feature_extraction import DictVectorizer
+from sklearn.linear_model import LinearRegression, Lasso, Ridge
 from sklearn.metrics import mean_squared_error
+
 import xgboost as xgb
+
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from hyperopt.pyll import scope
 
-import mlflow 
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
-mlflow.set_experiment("nyc-taxi-experiment")
+import mlflow
 
+from prefect import flow, task
+from prefect.task_runners import SequentialTaskRunner
+
+@task
 def read_dataframe(filename):
     df = pd.read_parquet(filename)
 
@@ -32,13 +32,17 @@ def read_dataframe(filename):
     
     return df
 
-def add_features(train_path='./data/green_tripdata_2021-01.parquet', 
-    val_path='./data/green_tripdata_2021-02.parquet'):
-    df_train = read_dataframe(train_path)
-    df_val = read_dataframe(val_path)
+@task
+def add_features(df_train, df_val):
+    # df_train = read_dataframe(train_path)
+    # df_val = read_dataframe(val_path)
+
+    print(len(df_train))
+    print(len(df_val))
 
     df_train['PU_DO'] = df_train['PULocationID'] + '_' + df_train['DOLocationID']
     df_val['PU_DO'] = df_val['PULocationID'] + '_' + df_val['DOLocationID']
+
     categorical = ['PU_DO'] #'PULocationID', 'DOLocationID']
     numerical = ['trip_distance']
 
@@ -56,40 +60,7 @@ def add_features(train_path='./data/green_tripdata_2021-01.parquet',
 
     return X_train, X_val, y_train, y_val, dv
 
-
-
-#### MODELLING
-
-# lr = LinearRegression()
-# lr.fit(X_train, y_train)
-
-# y_pred = lr.predict(X_val)
-
-# mean_squared_error(y_val, y_pred, squared=False)
-
-# with open('models/lin_reg.bin', 'wb') as f_out:
-#     pickle.dump((dv, lr), f_out)
-
-# with mlflow.start_run():
-
-#     mlflow.set_tag("developer", "Muhammed")
-
-#     mlflow.log_param("train-data-path", "./data/green_tripdata_2021-01.parquet")
-#     mlflow.log_param("valid-data-path", "./data/green_tripdata_2021-02.parquet")
-
-#     alpha = 0.1
-#     mlflow.log_param("alpha", alpha)
-#     lr = Lasso(alpha)
-#     lr.fit(X_train, y_train)
-
-#     y_pred = lr.predict(X_val)
-#     rmse = mean_squared_error(y_val, y_pred, squared=False)
-#     mlflow.log_metric("rmse", rmse)
-
-#     mlflow.log_artifact(local_path="models/lin_reg.bin", artifact_path="models_pickle")
-
-
-
+@task
 def train_model_search(train, valid, y_val):
     def objective(params):
         with mlflow.start_run():
@@ -122,51 +93,56 @@ def train_model_search(train, valid, y_val):
         fn=objective,
         space=search_space,
         algo=tpe.suggest,
-        max_evals=5,
+        max_evals=1,
         trials=Trials()
+    )
+    return
+
+@task
+def train_best_model(train, valid, y_val, dv):
+    with mlflow.start_run():
+
+        best_params = {
+            'learning_rate': 0.09585355369315604,
+            'max_depth': 30,
+            'min_child_weight': 1.060597050922164,
+            'objective': 'reg:linear',
+            'reg_alpha': 0.018060244040060163,
+            'reg_lambda': 0.011658731377413597,
+            'seed': 42
+        }
+
+        mlflow.log_params(best_params)
+
+        booster = xgb.train(
+            params=best_params,
+            dtrain=train,
+            num_boost_round=100,
+            evals=[(valid, 'validation')],
+            early_stopping_rounds=50
         )
-    return 
 
+        y_pred = booster.predict(valid)
+        rmse = mean_squared_error(y_val, y_pred, squared=False)
+        mlflow.log_metric("rmse", rmse)
 
-# mlflow.sklearn.autolog()
+        with open("models/preprocessor.b", "wb") as f_out:
+            pickle.dump(dv, f_out)
+        mlflow.log_artifact("models/preprocessor.b", artifact_path="preprocessor")
 
-def train_best_model(train, valid, y_val):
-        with mlflow.start_run():
+        mlflow.xgboost.log_model(booster, artifact_path="models_mlflow")
 
-            train = xgb.DMatrix(X_train, label=y_train)
-            valid = xgb.DMatrix(X_val, label=y_val)
-            best_params = {
-                'learning': 0.09585355369315604,
-                'max_depth': 30,
-                'min_child_weight': 1.060597050922164,
-                'objective': 'reg: linear',
-                'reg_alpha': 0.018060244040060163,
-                'reg_lambda': 0.011658731377413597,
-                'seed': 42
-            }
-
-            mlflow.log_params(best_params)
-            booster = xgb.train(
-                params=best_params,
-                dtrain=train,
-                num_boost_round=100,
-                evals=[(valid, 'validation')],
-                early_stopping_rounds=50
-            )
-
-            y_pred = booster.predict(valid)
-            rmse = mean_squared_error(y_val, y_pred, squared=False)
-            mlflow.log_metric('rmse', rmse)
-            with open('models/preprocessor.b', 'wb') as f_out:
-                pickle.dump(dv, f_out)
-            mlflow.log_artifact('models/prprocessor.b', artifact_path='preprocessor')
-
-            mlflow.xgboost.log_model(booster, artifact_path='models_mlflow')
-
-if __name__ == '__main__':
-    X_train, X_val, y_train, y_val, dv = add_features()
-    print(X_train.shape)
+@flow(task_runner=SequentialTaskRunner)
+def main(train_path: str="./data/green_tripdata_2021-01.parquet",
+        val_path: str="./data/green_tripdata_2021-02.parquet"):
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    mlflow.set_experiment("nyc-taxi-experiment")
+    X_train = read_dataframe(train_path)
+    X_val = read_dataframe(val_path)
+    X_train, X_val, y_train, y_val, dv = add_features(X_train, X_val).result()
     train = xgb.DMatrix(X_train, label=y_train)
     valid = xgb.DMatrix(X_val, label=y_val)
     train_model_search(train, valid, y_val)
-    train_best_model(train, valid, y_val)
+    train_best_model(train, valid, y_val, dv)
+
+main()
