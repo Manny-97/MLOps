@@ -56,8 +56,6 @@ def add_features(train_path='./data/green_tripdata_2021-01.parquet',
 
     return X_train, X_val, y_train, y_val, dv
 
-X_train, X_val, y_train, y_val, dv = add_features()
-print(X_train.shape)
 
 
 #### MODELLING
@@ -90,59 +88,85 @@ print(X_train.shape)
 
 #     mlflow.log_artifact(local_path="models/lin_reg.bin", artifact_path="models_pickle")
 
-# train = xgb.DMatrix(X_train, label=y_train)
-# valid = xgb.DMatrix(X_val, label=y_val)
 
-# def objective(params):
-#     with mlflow.start_run():
-#         mlflow.set_tag("model", "xgboost")
-#         mlflow.log_params(params)
-#         booster = xgb.train(
-#             params=params,
-#             dtrain=train,
-#             num_boost_round=100,
-#             evals=[(valid, 'validation')],
-#             early_stopping_rounds=50
-#         )
-#         y_pred = booster.predict(valid)
-#         rmse = mean_squared_error(y_val, y_pred, squared=False)
-#         mlflow.log_metric("rmse", rmse)
 
-#     return {'loss': rmse, 'status': STATUS_OK}
+def train_model_search(train, valid, y_val):
+    def objective(params):
+        with mlflow.start_run():
+            mlflow.set_tag("model", "xgboost")
+            mlflow.log_params(params)
+            booster = xgb.train(
+                params=params,
+                dtrain=train,
+                num_boost_round=100,
+                evals=[(valid, 'validation')],
+                early_stopping_rounds=50
+            )
+            y_pred = booster.predict(valid)
+            rmse = mean_squared_error(y_val, y_pred, squared=False)
+            mlflow.log_metric("rmse", rmse)
 
-# search_space = {
-#     'max_depth': scope.int(hp.quniform('max_depth', 4, 100, 1)),
-#     'learning_rate': hp.loguniform('learning_rate', -3, 0),
-#     'reg_alpha': hp.loguniform('reg_alpha', -5, -1),
-#     'reg_lambda': hp.loguniform('reg_lambda', -6, -1),
-#     'min_child_weight': hp.loguniform('min_child_weight', -1, 3),
-#     'objective': 'reg:linear',
-#     'seed': 42
-# }
+        return {'loss': rmse, 'status': STATUS_OK}
 
-# best_result = fmin(
-#     fn=objective,
-#     space=search_space,
-#     algo=tpe.suggest,
-#     max_evals=50,
-#     trials=Trials()
+    search_space = {
+        'max_depth': scope.int(hp.quniform('max_depth', 4, 100, 1)),
+        'learning_rate': hp.loguniform('learning_rate', -3, 0),
+        'reg_alpha': hp.loguniform('reg_alpha', -5, -1),
+        'reg_lambda': hp.loguniform('reg_lambda', -6, -1),
+        'min_child_weight': hp.loguniform('min_child_weight', -1, 3),
+        'objective': 'reg:linear',
+        'seed': 42
+    }
 
-# from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor
-# from sklearn.svm import LinearSVR
+    best_result = fmin(
+        fn=objective,
+        space=search_space,
+        algo=tpe.suggest,
+        max_evals=5,
+        trials=Trials()
+        )
+    return 
+
 
 # mlflow.sklearn.autolog()
 
-# for model_class in (RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor, LinearSVR):
+def train_best_model(train, valid, y_val):
+        with mlflow.start_run():
 
-#     with mlflow.start_run():
+            train = xgb.DMatrix(X_train, label=y_train)
+            valid = xgb.DMatrix(X_val, label=y_val)
+            best_params = {
+                'learning': 0.09585355369315604,
+                'max_depth': 30,
+                'min_child_weight': 1.060597050922164,
+                'objective': 'reg: linear',
+                'reg_alpha': 0.018060244040060163,
+                'reg_lambda': 0.011658731377413597,
+                'seed': 42
+            }
 
-#         mlflow.log_param("train-data-path", "./data/green_tripdata_2021-01.csv")
-#         mlflow.log_param("valid-data-path", "./data/green_tripdata_2021-02.csv")
-#         mlflow.log_artifact("models", artifact_path="preprocessor")
+            mlflow.log_params(best_params)
+            booster = xgb.train(
+                params=best_params,
+                dtrain=train,
+                num_boost_round=100,
+                evals=[(valid, 'validation')],
+                early_stopping_rounds=50
+            )
 
-#         mlmodel = model_class()
-#         mlmodel.fit(X_train, y_train)
+            y_pred = booster.predict(valid)
+            rmse = mean_squared_error(y_val, y_pred, squared=False)
+            mlflow.log_metric('rmse', rmse)
+            with open('models/preprocessor.b', 'wb') as f_out:
+                pickle.dump(dv, f_out)
+            mlflow.log_artifact('models/prprocessor.b', artifact_path='preprocessor')
 
-#         y_pred = mlmodel.predict(X_val)
-#         rmse = mean_squared_error(y_val, y_pred, squared=False)
-#         mlflow.log_metric("rmse", rmse)
+            mlflow.xgboost.log_model(booster, artifact_path='models_mlflow')
+
+if __name__ == '__main__':
+    X_train, X_val, y_train, y_val, dv = add_features()
+    print(X_train.shape)
+    train = xgb.DMatrix(X_train, label=y_train)
+    valid = xgb.DMatrix(X_val, label=y_val)
+    train_model_search(train, valid, y_val)
+    train_best_model(train, valid, y_val)
